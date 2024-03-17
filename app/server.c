@@ -7,6 +7,10 @@
 #include <errno.h>
 #include <unistd.h>
 
+#define BUFFER_SIZE 1024
+
+char *response_ok = "HTTP/1.1 200 OK\r\n\r\n";
+
 int main() {
 	// Disable output buffering
 	setbuf(stdout, NULL);
@@ -59,7 +63,18 @@ int main() {
 
 	printf("Client connected\n");
 
+	char request_buffer[BUFFER_SIZE];
+	if (read(client_fd, request_buffer, BUFFER_SIZE) < 0) {
+		printf("Read failed: %s \n", strerror(errno));
+		return 1;
+	} else {
+		printf("Request from client: %s\n", request_buffer);
+	}
+	if (send(client_fd, response_ok, strlen(response_ok), 0) < 0)
+		printf("Error: %s \n", strerror(errno));
+
 	close(server_fd);
+	close(client_fd);
 
 	return 0;
 }
