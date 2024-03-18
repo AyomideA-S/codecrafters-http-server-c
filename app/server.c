@@ -84,6 +84,17 @@ int main() {
 	}
 
 	char *start_line = strtok(request_buffer, "\r\n");
+	char *host = strtok(NULL, "\r\n");
+	char *request_line = host;
+	char *user_agent;
+	while (request_line != NULL) {
+		if (strstr(request_line, "User-Agent") != NULL) {
+			user_agent = request_line;
+			break;
+		}
+		request_line = strtok(NULL, "\r\n");
+	}
+
 	if (start_line == NULL) {
 		printf("Invalid request\n");
 		exit(1);
@@ -97,20 +108,23 @@ int main() {
 		exit(1);
 	}
 
-	char *data = strstr(path, "/echo/");
-
-	if (data != NULL) {
-		char *content = data + strlen("/echo/");
-		char *responseFormat = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
-		char response[1024];
-		sprintf(response, responseFormat, strlen(content), content);
-		send(client_fd, response, strlen(response), 0);
+	char *data;
+	char *content;
+	if ((data = strstr(path, "/echo/")) != NULL) {
+		content = data + strlen("/echo/");
+	} else if ((data = strstr(path, "/user-agent")) != NULL) {
+		content = user_agent + strlen("User-Agent: ");
 	} else {
 		if (strcmp(path, "/") == 0)
 			write(client_fd, response_ok, strlen(response_ok));
 		else
 			write(client_fd, response_not_found, strlen(response_not_found));
 	}
+
+	char *responseFormat = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
+	char response[1024];
+	sprintf(response, responseFormat, strlen(content), content);
+	send(client_fd, response, strlen(response), 0);
 
 	close(server_fd);
 	close(client_fd);
