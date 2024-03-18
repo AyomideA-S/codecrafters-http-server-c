@@ -1,3 +1,14 @@
+/**
+ * @file server.c
+ * @author Ayomide Ayodele-Soyebo (midesuperbest@gmail.com)
+ * @brief A simple HTTP server that listens on port 4221 and sends a 200 OK response to any client that connects to it.
+ * @version 0.1
+ * @date 2024-03-18
+ *
+ * @copyright Copyright (c) 2024
+ *
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -10,6 +21,7 @@
 #define BUFFER_SIZE 1024
 
 char *response_ok = "HTTP/1.1 200 OK\r\n\r\n";
+char *response_not_found = "HTTP/1.1 404 Not Found\r\n\r\n";
 
 int main() {
 	// Disable output buffering
@@ -70,8 +82,27 @@ int main() {
 	} else {
 		printf("Request from client: %s\n", request_buffer);
 	}
-	if (send(client_fd, response_ok, strlen(response_ok), 0) < 0)
-		printf("Error: %s \n", strerror(errno));
+
+	char *start_line = strtok(request_buffer, "\r\n");
+	if (start_line == NULL) {
+		printf("Invalid request\n");
+		exit(1);
+	}
+
+	char *http_method = strtok(start_line, " ");
+	char *path = strtok(NULL, " ");
+	char *http_version = strtok(NULL, " ");
+	if (http_method == NULL || path == NULL || http_version == NULL) {
+		printf("Invalid request\n");
+		exit(1);
+	}
+
+	if (strcmp(path, "/") == 0) {
+		write(client_fd, response_ok, strlen(response_ok));
+	} else {
+		printf("%s", response_not_found);
+		write(client_fd, response_not_found, strlen(response_not_found));
+	}
 
 	close(server_fd);
 	close(client_fd);
