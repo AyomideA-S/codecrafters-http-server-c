@@ -97,11 +97,19 @@ int main() {
 		exit(1);
 	}
 
-	if (strcmp(path, "/") == 0) {
-		write(client_fd, response_ok, strlen(response_ok));
+	char *data = strstr(path, "/echo/");
+
+	if (data != NULL) {
+		char *content = data + strlen("/echo/");
+		char *responseFormat = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
+		char response[1024];
+		sprintf(response, responseFormat, strlen(content), content);
+		send(client_fd, response, strlen(response), 0);
 	} else {
-		printf("%s", response_not_found);
-		write(client_fd, response_not_found, strlen(response_not_found));
+		if (strcmp(path, "/") == 0)
+			write(client_fd, response_ok, strlen(response_ok));
+		else
+			write(client_fd, response_not_found, strlen(response_not_found));
 	}
 
 	close(server_fd);
