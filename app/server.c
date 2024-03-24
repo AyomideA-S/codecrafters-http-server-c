@@ -20,18 +20,21 @@
 #include <pthread.h>
 #include <stdbool.h>
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 
-char *response_ok = "HTTP/1.1 200 OK\r\n\r\n";
-char *response_not_found = "HTTP/1.1 404 Not Found\r\n\r\n";
+#define RESPONSE_OK "HTTP/1.1 200 OK\r\n\r\n"
+#define RESPONSE_NOT_FOUND "HTTP/1.1 404 Not Found\r\n\r\n"
+#define RESPONSE_NOT_ALLOWED "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+#define RESPONSE_SERVER_ERROR "HTTP/1.1 500 Internal Server Error\r\n\r\n"
 
 /**
  * @brief This function handles the client request
  *
  * @param client_socket The file descriptor for the client socket
+ * @param directory The directory to serve files from
  * @return void*
  */
-void *handle_client(int client_socket) {
+void *handle_client(int client_socket, char *directory) {
 	int client_fd = client_socket;
 
 	char buffer[BUFFER_SIZE];
@@ -45,9 +48,8 @@ void *handle_client(int client_socket) {
 		return (void *)1;
 	} else {
 		strncpy(request_buffer, buffer, BUFFER_SIZE - 1); /* Use strncpy to avoid buffer overflow */
-		request_buffer[BUFFER_SIZE - 1] = '\0';			  /* Ensure null-termination */
-		printf("Client #%d: \n", client_fd);
-		printf("Request from client: %s\n", request_buffer);
+		request_buffer[BUFFER_SIZE - 1] = '\0'; /* Ensure null-termination */
+		printf("Request from client:\n%s\n", request_buffer);
 	}
 
 	char *start_line = strtok(request_buffer, "\r\n");
@@ -80,31 +82,79 @@ void *handle_client(int client_socket) {
 	int bytes_written = 0;
 	if ((data = strstr(path, "/echo/")) != NULL) {
 		content = data + strlen("/echo/");
-		char *responseFormat = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
+		char *response_format = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
 		response = (char *)malloc(BUFFER_SIZE);
-		bytes_written = snprintf(response, BUFFER_SIZE, responseFormat, strlen(content), content);
+		bytes_written = snprintf(response, BUFFER_SIZE, response_format, strlen(content), content);
 		if (bytes_written < 0 || bytes_written >= BUFFER_SIZE) {
 			printf("Failed to create response\n");
 			free(response);
 			response = NULL;
+			return (void *)1;
 		}
 		send(client_fd, response, strlen(response), 0);
 	} else if ((data = strstr(path, "/user-agent")) != NULL) {
 		content = user_agent + strlen("User-Agent: ");
-		char *responseFormat = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
+		char *response_format = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s";
 		response = (char *)malloc(BUFFER_SIZE);
-		bytes_written = snprintf(response, BUFFER_SIZE, responseFormat, strlen(content), content);
+		bytes_written = snprintf(response, BUFFER_SIZE, response_format, strlen(content), content);
 		if (bytes_written < 0 || bytes_written >= BUFFER_SIZE) {
 			printf("Failed to create response\n");
 			free(response);
 			response = NULL;
+			return (void *)1;
 		}
 		send(client_fd, response, strlen(response), 0);
+	} else if ((data = strstr(path, "/files/")) != NULL) {
+		char *response_format = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %ld\r\n\r\n%s";
+		response = (char *)malloc(BUFFER_SIZE);
+        if (strcmp(http_method, "GET") == 0) {
+			char* file_content = NULL;
+
+			if (directory != NULL) {
+				char* file_name = strchr(path + 1, '/') + 1;
+				size_t file_path_len = strlen(directory) + strlen(file_name) + 1;
+				char* file_path = (char*) malloc(file_path_len);
+				snprintf(file_path, file_path_len, "%s%s", directory, file_name);
+
+				FILE* file_pointer = fopen(file_path, "r");
+				if (file_pointer != NULL) {
+					fseek(file_pointer, 0L, SEEK_END);
+					long size = ftell(file_pointer);
+					fseek(file_pointer, 0L, SEEK_SET);
+					file_content = (char*) malloc(size + 1);
+					fread(file_content, size, 1, file_pointer);
+					fclose(file_pointer);
+				}
+
+				free(file_path);
+			}
+
+			if (directory != NULL && file_content != NULL) {
+				snprintf(response, BUFFER_SIZE, response_format, strlen(file_content), file_content);
+			}
+			else if (directory != NULL && file_content == NULL) {
+				snprintf(response, BUFFER_SIZE, "%s", RESPONSE_NOT_FOUND);
+			}
+			else {
+				snprintf(response, BUFFER_SIZE, "%s", RESPONSE_SERVER_ERROR);
+			}
+
+		} else {
+			snprintf(response, BUFFER_SIZE, "%s", RESPONSE_NOT_ALLOWED);
+		}
+
+		ssize_t bytes_send = send(client_fd, response, strlen(response), 0);
+		if (bytes_written < 0 || bytes_written >= BUFFER_SIZE) {
+			printf("Failed to create response\n");
+			free(response);
+			response = NULL;
+			return (void *)1;
+		}
 	} else {
 		if (strcmp(path, "/") == 0)
-			write(client_fd, response_ok, strlen(response_ok));
+			write(client_fd, RESPONSE_OK, strlen(RESPONSE_OK));
 		else
-			write(client_fd, response_not_found, strlen(response_not_found));
+			write(client_fd, RESPONSE_NOT_FOUND, strlen(RESPONSE_NOT_FOUND));
 	}
 
 	/** Close the socket
@@ -120,9 +170,17 @@ void *handle_client(int client_socket) {
  *
  * @return int 0 on success, 1 on error
  */
-int main() {
+int main(int argc, char **argv) {
 	// Disable output buffering
 	setbuf(stdout, NULL);
+
+	char *directory = NULL;
+	for (int i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--directory") == 0) {
+			if (i + 1 < argc) 
+				directory = argv[i + 1];
+		}
+	}
 
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	printf("Logs from your program will appear here!\n");
@@ -186,37 +244,37 @@ int main() {
 
 	uint16_t thread_count = 0;
 
-	printf("Waiting for a client to connect...\n");
-
 	while (true) {
+		printf("Waiting for a client to connect...\n");
 		/** Accept a connection
 		 * client_addr: Address of the client
 		 * client_addr_len: Length of the client address
 		 * Returns a file descriptor for the client socket (a non-negative integer)
-		 * On error, -1 is returned
+		 * On error, 1 is returned
 		 */
 		client_addr_len = sizeof(client_addr);
 
 		/** Returns a file descriptor for the accepted socket (a non-negative integer)
-		 * On error, -1 is returned
+		 * On error, 1 is returned
 		 */
 		if ((client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len)) < 0) {
 			printf("Accept failed: %s \n", strerror(errno));
 			return 1;
 		}
-
 		printf("Client connected\n");
-		pthread_t thread;
 
 		if (!fork()) {
-			close(server_fd);
-			handle_client(client_fd);
-			close(client_fd);
-			exit(0);
+			if (handle_client(client_fd, directory) == (void *)1) {
+				printf("Connection error\n");
+				return 1;
+			}
+			break;
 		}
+		close(client_fd);
 		thread_count++;
 	}
 
+	close(client_fd);
 	close(server_fd);
 
 	return 0;
