@@ -23,16 +23,26 @@
 #define BUFFER_SIZE 4096
 
 #define RESPONSE_OK "HTTP/1.1 200 OK\r\n\r\n"
+#define RESPONSE_CREATED "HTTP/1.1 201 Created\r\n\r\n"
 #define RESPONSE_NOT_FOUND "HTTP/1.1 404 Not Found\r\n\r\n"
 #define RESPONSE_NOT_ALLOWED "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
 #define RESPONSE_SERVER_ERROR "HTTP/1.1 500 Internal Server Error\r\n\r\n"
 
 /**
- * @brief This function handles the client request
- *
- * @param client_socket The file descriptor for the client socket
- * @param directory The directory to serve files from
- * @return void*
+ * @brief The function `handle_client` processes client requests, reads and parses HTTP headers, handles
+ * different types of requests (echo, user-agent, files), and sends appropriate responses back to the
+ * client.
+ * 
+ * @param client_socket The `client_socket` parameter in the `handle_client` function represents the
+ * file descriptor for the client socket connection. It is used to read data from and write data to the
+ * client that is communicating with the server.
+ * @param directory The `directory` parameter in the `handle_client` function represents the directory
+ * path where files are stored or from where files will be served in response to client requests. This
+ * directory is used to locate and access files requested by clients in the HTTP requests. The function
+ * handles different types of HTTP requests such as
+ * 
+ * @return The function `handle_client` returns a void pointer `(void *)` with the value `0` on success
+ * and the value `1` on failure.
  */
 void *handle_client(int client_socket, char *directory) {
 	int client_fd = client_socket;
@@ -49,9 +59,9 @@ void *handle_client(int client_socket, char *directory) {
 	} else {
 		strncpy(request_buffer, buffer, BUFFER_SIZE - 1); /* Use strncpy to avoid buffer overflow */
 		request_buffer[BUFFER_SIZE - 1] = '\0'; /* Ensure null-termination */
-		printf("Request from client:\n%s\n", request_buffer);
 	}
 
+	char *header = strchr(request_buffer, '\n') + 1;
 	char *start_line = strtok(request_buffer, "\r\n");
 	char *host = strtok(NULL, "\r\n");
 	char *request_line = host;
@@ -105,17 +115,29 @@ void *handle_client(int client_socket, char *directory) {
 		}
 		send(client_fd, response, strlen(response), 0);
 	} else if ((data = strstr(path, "/files/")) != NULL) {
+		char *file_path = NULL;
 		char *response_format = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %ld\r\n\r\n%s";
 		response = (char *)malloc(BUFFER_SIZE);
-        if (strcmp(http_method, "GET") == 0) {
+
+        if (directory != NULL) {
+			char* file_name = strchr(path + 1, '/') + 1;
+			size_t file_path_len = strlen(directory) + strlen(file_name) + 1;
+			file_path = (char*) malloc(file_path_len);
+
+			if (file_path == NULL) {
+				printf("Failed to allocate memory\n");
+				free(response);
+				response = NULL;
+				return (void *)1;
+			} else {
+				snprintf(file_path, file_path_len, "%s%s", directory, file_name);
+			}
+		}
+
+		if (strcmp(http_method, "GET") == 0) {
 			char* file_content = NULL;
 
-			if (directory != NULL) {
-				char* file_name = strchr(path + 1, '/') + 1;
-				size_t file_path_len = strlen(directory) + strlen(file_name) + 1;
-				char* file_path = (char*) malloc(file_path_len);
-				snprintf(file_path, file_path_len, "%s%s", directory, file_name);
-
+			if (file_path != NULL) {
 				FILE* file_pointer = fopen(file_path, "r");
 				if (file_pointer != NULL) {
 					fseek(file_pointer, 0L, SEEK_END);
@@ -129,16 +151,37 @@ void *handle_client(int client_socket, char *directory) {
 				free(file_path);
 			}
 
-			if (directory != NULL && file_content != NULL) {
+			if (file_content != NULL)
 				snprintf(response, BUFFER_SIZE, response_format, strlen(file_content), file_content);
-			}
-			else if (directory != NULL && file_content == NULL) {
+			else if (file_content == NULL)
 				snprintf(response, BUFFER_SIZE, "%s", RESPONSE_NOT_FOUND);
-			}
-			else {
+			else
 				snprintf(response, BUFFER_SIZE, "%s", RESPONSE_SERVER_ERROR);
-			}
+		} else if (strcmp(http_method, "POST") == 0) {
+			int flag = -1;
 
+			if (file_path != NULL) {
+				char *content = strrchr(buffer, '\r');
+				if (content[1] == '\n')
+					content += 2;
+				else
+					content = NULL;
+
+				FILE* file_pointer = fopen(file_path, "w");
+
+				if (file_pointer != NULL) {
+					fprintf(file_pointer, "%s", content);
+					flag = 0;
+					fclose(file_pointer);
+				}
+
+				free(file_path);
+			}
+			
+			if (flag != -1)
+				snprintf(response, BUFFER_SIZE, "%s", RESPONSE_CREATED);
+			else
+				snprintf(response, BUFFER_SIZE, "%s", RESPONSE_SERVER_ERROR);
 		} else {
 			snprintf(response, BUFFER_SIZE, "%s", RESPONSE_NOT_ALLOWED);
 		}
@@ -160,15 +203,26 @@ void *handle_client(int client_socket, char *directory) {
 	/** Close the socket
 	 * Returns 0 on success, -1 on error
 	 */
+	free(response);
+	response = NULL;
 	close(client_fd);
 
 	return (void *)0;
 }
 
 /**
- * @brief The main function
- *
- * @return int 0 on success, 1 on error
+ * @brief The main function sets up a server socket, listens for incoming connections, and handles client
+ * connections in a multi-threaded manner.
+ * 
+ * @param argc `argc` is the argument count, which represents the number of arguments passed to the
+ * program when it is executed. It includes the name of the program itself as the first argument.
+ * @param argv argv is an array of strings containing the command-line arguments passed to the program.
+ * The first element (argv[0]) is the name of the program itself, and subsequent elements contain any
+ * additional arguments provided when running the program.
+ * 
+ * @return The `main` function is returning an integer value, either 0 or 1. A return value of 0
+ * typically indicates successful execution of the program, while a return value of 1 usually indicates
+ * an error or abnormal termination.
  */
 int main(int argc, char **argv) {
 	// Disable output buffering
